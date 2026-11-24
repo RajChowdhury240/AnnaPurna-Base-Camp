@@ -89,7 +89,7 @@ export function createWorld(canvas, { lite }) {
   });
   // Render scale adapts to the machine (see render); start a notch below the screen's density.
   const maxRatio = Math.min(devicePixelRatio, lite ? 1.5 : 2);
-  let ratio = Math.min(maxRatio, 1.5);
+  let ratio = Math.min(maxRatio, lite ? 1 : 1.25);
   renderer.setPixelRatio(ratio);
   renderer.toneMapping = NeutralToneMapping;
   renderer.toneMappingExposure = 1.0;
@@ -122,7 +122,9 @@ export function createWorld(canvas, { lite }) {
   scene.add(sky);
 
   // The 20 m survey mosaic stands in for each tile until its aerial photograph arrives.
-  const baseTexture = new TextureLoader().load(satelliteUrl);
+  let baseLoaded, baseFailed;
+  const ready = new Promise((resolve, reject) => { baseLoaded = resolve; baseFailed = reject; });
+  const baseTexture = new TextureLoader().load(satelliteUrl, baseLoaded, undefined, baseFailed);
   baseTexture.colorSpace = SRGBColorSpace;
   baseTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const tiles = createTiles({ renderer, camera, baseTexture, lite });
@@ -131,12 +133,15 @@ export function createWorld(canvas, { lite }) {
   sky.material.uniforms.cloudCover = tiles.uniforms.cloudCover;
 
   // Camera finish: a soft bloom on the sun and sunlit snow, filmic highlight roll-off.
-  const target = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: lite ? 0 : 2 });
-  const composer = new EffectComposer(renderer, target);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new Vector2(1, 1), 0.28, 0.55, 0.92);
-  composer.addPass(bloom);
-  composer.addPass(new OutputPass());
+  let composer, bloom;
+  if (!lite && renderer.extensions.has("EXT_color_buffer_float")) {
+    const target = new WebGLRenderTarget(1, 1, { type: HalfFloatType });
+    composer = new EffectComposer(renderer, target);
+    composer.addPass(new RenderPass(scene, camera));
+    bloom = new UnrealBloomPass(new Vector2(1, 1), 0.22, 0.45, 0.98);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
+  }
   let composerRatio = renderer.getPixelRatio();
 
   // A low apron beyond the survey so its edge dissolves into haze.
@@ -146,17 +151,6 @@ export function createWorld(canvas, { lite }) {
   );
   apron.position.set((bounds.x0 + bounds.x1) / 2, 0.2, (bounds.z0 + bounds.z1) / 2);
   scene.add(apron);
-
-  const ready = new Promise((resolve) => {
-    const t0 = performance.now();
-    const check = () => {
-      tiles.update();
-      // Wait for the first ring of photographs, but never hold the view back for long.
-      if ((tiles.stats.loaded + tiles.stats.failed >= 12 && tiles.stats.pending < 6) || performance.now() - t0 > 6000) resolve();
-      else setTimeout(check, 120);
-    };
-    check();
-  });
 
   // ----- the walked line -----
   const aerialTrail = new Group(), groundTrail = new Group();
@@ -297,7 +291,7 @@ diffuseColor.a = 0.62 * soft * smoothstep(0.26, 0.4, vDist) * (1.0 - smoothstep(
     t.grade.value.setRGB(...G.grade.map((g, i) => MathUtils.lerp(g, D.grade[i], k)));
     // Hold a touch more highlight detail in the golden light; keep bloom subtle by day.
     renderer.toneMappingExposure = MathUtils.lerp(1.06, 1.0, k);
-    bloom.strength = MathUtils.lerp(0.33, 0.26, k);
+    if (bloom) bloom.strength = MathUtils.lerp(0.33, 0.26, k);
     scene.fog.color.copy(c("fog"));
     scene.fog.density = t.fogDensity.value * 0.55;
     sunLight.position.copy(dir).multiplyScalar(50);
@@ -318,8 +312,8 @@ diffuseColor.a = 0.62 * soft * smoothstep(0.26, 0.4, vDist) * (1.0 - smoothstep(
     camera.updateProjectionMatrix();
     for (const l of lines) l.material.resolution.set(w, h);
     const pr = renderer.getPixelRatio();
-    if (pr !== composerRatio) { composer.setPixelRatio(pr); composerRatio = pr; }
-    composer.setSize(w, h);
+    if (pr !== composerRatio) { composer?.setPixelRatio(pr); composerRatio = pr; }
+    composer?.setSize(w, h);
   }
 
   // Adaptive resolution. A single slow frame must not soften the image: require a run of
@@ -332,8 +326,8 @@ diffuseColor.a = 0.62 * soft * smoothstep(0.26, 0.4, vDist) * (1.0 - smoothstep(
     slow = avg > 20 ? slow + 1 : 0;
     fast = avg < 14.5 ? fast + 1 : 0;
     let next = ratio;
-    if (slow > 24 && ratio > 0.8) {
-      next = Math.max(0.8, ratio - 0.12);
+    if (slow > 24 && ratio > 0.7) {
+      next = Math.max(0.7, ratio - 0.12);
       slow = fast = 0;
       cooldown = 90;
     } else if (fast > 90 && ratio < maxRatio) {
@@ -353,7 +347,8 @@ diffuseColor.a = 0.62 * soft * smoothstep(0.26, 0.4, vDist) * (1.0 - smoothstep(
     sky.position.copy(camera.position);
     tiles.update();
     tiles.uniforms.cloudTime.value = performance.now() / 1000;
-    composer.render();
+    if (composer && ratio > 0.95) composer.render();
+    else renderer.render(scene, camera);
   }
 
   return { renderer, scene, camera, ready, tiles, setTrail, setTrailMode, showTrail, setSun, sunDir, resize, render };

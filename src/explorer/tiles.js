@@ -2,9 +2,10 @@
 // aerial imagery, refined near the camera. Heights come from the same survey as
 // everything else (ground), so the trail and the walker sit on what you see.
 import {
-  BufferGeometry, BufferAttribute, Mesh, ShaderMaterial, Texture, SRGBColorSpace, LinearMipmapLinearFilter,
+  BufferGeometry, BufferAttribute, Mesh, ShaderMaterial, Texture, TextureLoader, RepeatWrapping, SRGBColorSpace, LinearMipmapLinearFilter,
   LinearFilter, DoubleSide, Box3, Vector3, Frustum, Matrix4, Group, Color,
 } from "three";
+import schistUrl from "./materials/schist.webp?inline";
 import { ground, toXZ, imageUV, bounds, toLonLat, heightField } from "./terrain.js";
 import { DataTexture, RedFormat, HalfFloatType, DataUtils, Vector4, Vector2, ClampToEdgeWrapping } from "three";
 
@@ -45,7 +46,6 @@ const IMAGERY = (z, x, y) =>
 export const IMAGERY_CREDIT = "Imagery: Esri, Maxar, Earthstar Geographics and the GIS User Community";
 
 const ROOT_Z = 11;
-export const FOREST_Z = 16;
 const SEG = 32; // base resolution; near tiles refine further in buildMesh
 
 const x2lon = (x, z) => (x / 2 ** z) * 360 - 180;
@@ -57,56 +57,12 @@ const lat2y = (lat, z) => {
 };
 
 const vert = /* glsl */ `
-attribute vec2 uvBase;
-varying vec2 vUv;
-varying vec2 vUvBase;
-varying vec3 vWorld;
-varying vec3 vNormal;
-#include <common>
-#include <logdepthbuf_pars_vertex>
-void main() {
-  vUv = uv;
-  vUvBase = uvBase;
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorld = wp.xyz;
-  vNormal = normalize(mat3(modelMatrix) * normal);
-  gl_Position = projectionMatrix * viewMatrix * wp;
-  #include <logdepthbuf_vertex>
-}`;
-
-const frag = /* glsl */ `
-uniform sampler2D map;
-uniform sampler2D baseMap;
-uniform float useBase;
 uniform vec3 sunDir;
-uniform vec3 sunColor;
-uniform vec3 ambientColor;
-uniform vec3 fogColor;
-uniform vec3 fogSun;
-uniform float fogDensity;
-uniform float relief;
-uniform vec3 grade;
 uniform sampler2D heightMap;
 uniform vec4 xb;
 uniform vec4 zb;
 uniform vec4 seg;
 uniform vec2 hmSize;
-varying vec2 vUv;
-varying vec2 vUvBase;
-varying vec3 vWorld;
-varying vec3 vNormal;
-#include <common>
-#include <logdepthbuf_pars_fragment>
-
-float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-float vnoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + 1.0), f.x), f.y);
-}
-
-${CLOUD_GLSL}
-
 float pw(float v, vec4 a, vec4 s) {
   if (v < a.y) return mix(s.x, s.y, clamp((v - a.x) / (a.y - a.x), 0.0, 1.0));
   if (v < a.z) return mix(s.y, s.z, (v - a.y) / (a.z - a.y));
@@ -129,6 +85,56 @@ float terrainShadow(vec3 p, vec3 L) {
   }
   return clamp(res, 0.0, 1.0);
 }
+
+
+attribute vec2 uvBase;
+varying vec2 vUv;
+varying vec2 vUvBase;
+varying vec3 vWorld;
+varying float vRidgeLight;
+varying vec3 vNormal;
+#include <common>
+#include <logdepthbuf_pars_vertex>
+void main() {
+  vUv = uv;
+  vUvBase = uvBase;
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorld = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vRidgeLight = sunDir.y > 0.0 ? terrainShadow(wp.xyz + vNormal * 0.006, sunDir) : 0.0;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+  #include <logdepthbuf_vertex>
+}`;
+
+const frag = /* glsl */ `
+uniform sampler2D map;
+uniform sampler2D baseMap;
+uniform sampler2D stoneMap;
+uniform float useBase;
+uniform vec3 sunDir;
+uniform vec3 sunColor;
+uniform vec3 ambientColor;
+uniform vec3 fogColor;
+uniform vec3 fogSun;
+uniform float fogDensity;
+uniform float relief;
+uniform vec3 grade;
+varying vec2 vUv;
+varying vec2 vUvBase;
+varying vec3 vWorld;
+varying float vRidgeLight;
+varying vec3 vNormal;
+#include <common>
+#include <logdepthbuf_pars_fragment>
+
+float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + 1.0), f.x), f.y);
+}
+
+${CLOUD_GLSL}
 
 // Integer-lattice value noise in metres, anchored to a 1 km block near the camera,
 // so it stays crisp kilometres from the origin and never shifts as you move.
@@ -160,58 +166,45 @@ void main() {
   float snowLit = smoothstep(0.36, 0.6, mLum) * (1.0 - smoothstep(0.07, 0.2, mSat));
   float snowShade = smoothstep(0.17, 0.32, mLum) * step(maskTex.r, maskTex.b * 1.03)
                   * (1.0 - smoothstep(0.09, 0.2, mSat)) * smoothstep(3.4, 4.2, vWorld.y);
-  float snowMask = max(snowLit, snowShade);
+  float snowMask = max(snowLit, snowShade) * smoothstep(3.2, 4.25, vWorld.y);
   vec3 N = normalize(vNormal);
   vec3 V = vWorld - cameraPosition;
   float d = length(V);
   vec3 viewDir = V / max(d, 1e-5);
 
-  // A metre-scale block anchored near the camera keeps all fine detail crisp kilometres
-  // from the origin and free of sliding as the view moves.
-  vec3 block = floor(cameraPosition * 1000.0 / 1024.0) * 1024.0;
-  vec3 L = vWorld * 1000.0 - block; // metres, small
-
-  // Ground cover within a couple of hundred metres, where even 1 m imagery runs out:
-  // triplanar noise so it never stretches on slopes, tinted by the photograph's own colour.
-  float near = (1.0 - smoothstep(0.03, 0.35, d)) * (1.0 - snowMask);
-  if (near > 0.0) {
-    vec3 w = abs(N); w /= (w.x + w.y + w.z);
-    float tuft = 0.0;
-    tuft += (vnM(L.xz, block.xz, 2.0) * w.y + vnM(L.zy, block.zy, 2.0) * w.x + vnM(L.xy, block.xy, 2.0) * w.z) * 0.4;
-    tuft += (vnM(L.xz, block.xz, 7.0) * w.y + vnM(L.zy, block.zy, 7.0) * w.x + vnM(L.xy, block.xy, 7.0) * w.z) * 0.35;
-    tuft += (vnM(L.xz, block.xz, 25.0) * w.y + vnM(L.zy, block.zy, 25.0) * w.x + vnM(L.xy, block.xy, 25.0) * w.z) * 0.25;
-    vec3 tone = useBase > 0.5 ? albedo : texture2D(map, vUv, 2.5).rgb;
-    vec3 cover = tone * (0.55 + tuft * 0.95);
-    albedo = mix(albedo, cover, near * 0.7);
+  // Resolve the meadow, forest floor and scree at walking scale. High-contrast
+  // shapes baked into the overhead photograph lose their footprint at this range.
+  float closeGround = 1.0 - smoothstep(0.018, 0.19, d);
+  if (closeGround > 0.0) {
+    vec2 floorUV = vWorld.xz * 1000.0;
+    vec3 coarseRock = texture2D(stoneMap, floorUV * 0.27 + vWorld.y * 1.5).rgb;
+    vec3 grit = texture2D(stoneMap, floorUV * 1.37 + coarseRock.rg * 0.24).rgb;
+    float meadow = (1.0 - smoothstep(3.05, 4.08, vWorld.y)) * smoothstep(0.44, 0.86, N.y);
+    float turfCover = vnoise(vWorld.xz * 76.0 + coarseRock.rg * 1.3);
+    vec3 turf = mix(vec3(0.083, 0.080, 0.043), vec3(0.129, 0.159, 0.066), turfCover);
+    turf *= 0.72 + dot(grit, vec3(0.8, 1.2, 0.4));
+    vec3 groundTone = mix(coarseRock * (0.55 + grit * 1.5), turf, meadow);
+    groundTone *= clamp(0.80 + grey * 1.3, 0.75, 1.20);
+    albedo = mix(albedo, groundTone, closeGround * (1.0 - snowMask) * 0.96);
   }
 
-  // Sub-metre relief on the ground: a few noise samples perturb the normal so even the
-  // sharpest aerial tile stops looking flat underfoot. Fades out before it can shimmer.
-#if LITE == 0
-  float micro = (1.0 - smoothstep(0.06, 0.28, d)) * (1.0 - snowMask);
-  if (micro > 0.0) {
-    float eM = 0.6;
-    float h0 = vnM(L.xz, block.xz, 3.0);
-    float hx = vnM(L.xz + vec2(eM, 0.0), block.xz, 3.0);
-    float hz = vnM(L.xz + vec2(0.0, eM), block.xz, 3.0);
-    N = normalize(N + vec3(-(hx - h0), 0.0, -(hz - h0)) * 0.45 * micro);
-  }
-#endif
-
-  // Top-down photographs smear on cliffs: blend in a blurred tone with rock strata there.
-  float steep = smoothstep(0.42, 0.78, 1.0 - N.y);
-  steep *= 1.0 - snowMask * 0.7;
-  if (steep > 0.0 && useBase < 0.5) {
-    vec3 tone = texture2D(map, vUv, 4.0).rgb;
-    float strata = vnoise(vec2(vWorld.y * 260.0, (vWorld.x + vWorld.z) * 18.0)) * 0.6
-                 + vnoise(vec2(vWorld.y * 900.0, (vWorld.x - vWorld.z) * 60.0)) * 0.4;
-    vec3 rock = mix(tone, vec3(dot(tone, vec3(0.33))) * vec3(1.0, 0.97, 0.94), 0.65) * (0.7 + strata * 0.5);
-    albedo = mix(albedo, rock, steep * 0.7);
+  // Project strata onto the mountain face at two geological scales. The bundled
+  // photograph retains its gullies and rock outcrops at every imagery level.
+  float crag = smoothstep(0.16, 0.58, 1.0 - N.y) * smoothstep(2.65, 4.15, vWorld.y);
+  if (crag > 0.01) {
+    vec2 rockUV = vec2(vWorld.x * 0.78 + vWorld.z * 0.62, vWorld.y + vWorld.z * 0.16);
+    vec3 bedrock = texture2D(stoneMap, rockUV * 3.4).rgb;
+    vec3 flakes = texture2D(stoneMap, rockUV * 13.0 + vec2(0.21, 0.61)).rgb;
+    float strata = dot(bedrock * 0.72 + flakes * 0.28, vec3(0.30, 0.56, 0.14));
+    float catchment = smoothstep(0.28, 0.85, N.y + (strata - 0.2) * 0.45);
+    snowMask *= mix(1.0, catchment, crag * 0.9);
+    vec3 rock = mix(albedo, bedrock * (0.46 + grey * 1.15), 0.40);
+    albedo = mix(albedo, rock * clamp(0.66 + strata * 1.55, 0.55, 1.35), crag);
   }
   // Sunlight: ridge shadows from the survey, moving cloud shadows, slope relief on top
   // of the light already in the photograph.
   float ndl = max(dot(N, sunDir), 0.0);
-  float sh = sunDir.y > 0.0 ? terrainShadow(vWorld + N * 0.006, sunDir) : 0.0;
+  float sh = smoothstep(0.025, 0.95, vRidgeLight);
   if (sunDir.y > 0.02) {
     vec2 cp = vWorld.xz + sunDir.xz * ((CLOUD_Y - vWorld.y) / sunDir.y);
     sh *= 1.0 - cloudShadowDensity(cp) * 0.6;
@@ -219,19 +212,6 @@ void main() {
   float direct = sh * mix(1.0, ndl * 1.5, relief);
   vec3 light = ambientColor * 0.62 + sunColor * direct * 0.72;
   vec3 col = albedo * grade * light * 1.08;
-
-  // Contact darkening in gullies and folds, read from the same elevation survey that
-  // casts the shadows. Adds depth where a top-down photograph has none.
-#if LITE == 0
-  float aoNear = 1.0 - smoothstep(0.15, 0.9, d);
-  if (aoNear > 0.0) {
-    vec2 a = vWorld.xz;
-    float hc = hAt(a);
-    float hs = (hAt(a + vec2(0.035, 0.0)) + hAt(a - vec2(0.035, 0.0))
-              + hAt(a + vec2(0.0, 0.035)) + hAt(a - vec2(0.0, 0.035))) * 0.25;
-    col *= mix(1.0, clamp(0.92 + (hc - hs) * 7.0, 0.78, 1.04), aoNear);
-  }
-#endif
 
   // Snow is lit by the real sun on the real slope, not by the photograph's own light:
   // wind-carved drifts and ripples, blue in shade, a soft sheen, sparkle up close.
@@ -253,7 +233,7 @@ void main() {
     }
     float ndlS = dot(Ns, sunDir);
     float wrap = max((ndlS + 0.15) / 1.15, 0.0);
-    vec3 snowAlb = mix(vec3(0.84, 0.87, 0.91), albedo, 0.2 * (1.0 - smoothstep(0.3, 0.7, 1.0 - N.y)));
+    vec3 snowAlb = mix(vec3(0.84, 0.87, 0.91), albedo, 0.28 + crag * 0.24);
     vec3 skyFill = ambientColor * vec3(0.78, 0.9, 1.18) * (0.5 + 0.35 * Ns.y);
     vec3 snowCol = snowAlb * (skyFill + sunColor * wrap * sh * 1.02);
     // Light scattered inside the snowpack keeps shade from going grey.
@@ -288,7 +268,12 @@ void main() {
 
 export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) {
   const group = new Group();
+  const stoneTexture = new TextureLoader().load(schistUrl);
+  stoneTexture.colorSpace = SRGBColorSpace;
+  stoneTexture.wrapS = stoneTexture.wrapT = RepeatWrapping;
+  stoneTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   const shared = {
+    stoneMap: { value: stoneTexture },
     sunDir: { value: new Vector3(0.4, 0.7, 0.5).normalize() },
     sunColor: { value: new Color("#fff3e0") },
     ambientColor: { value: new Color("#c9d6e6") },
@@ -368,8 +353,8 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
       uv[k * 2] = u; uv[k * 2 + 1] = v;
       const [bu, bv] = imageUV(wx, wz);
       uvBase[k * 2] = bu; uvBase[k * 2 + 1] = 1 - bv;
-      const sx = (H[gj * n + Math.min(n - 1, gi + 1)] - H[gj * n + Math.max(0, gi - 1)]) / (2 * ex);
-      const sz = (H[Math.min(n - 1, gj + 1) * n + gi] - H[Math.max(0, gj - 1) * n + gi]) / (2 * ez);
+      const sx = (H[gj * n + Math.min(n - 1, gi + 1)] - H[gj * n + Math.max(0, gi - 1)]) / ((gi === 0 || gi === seg ? 1 : 2) * ex);
+      const sz = (H[Math.min(n - 1, gj + 1) * n + gi] - H[Math.max(0, gj - 1) * n + gi]) / ((gj === 0 || gj === seg ? 1 : 2) * ez);
       const l = Math.hypot(sx, 1, sz);
       nor[k * 3] = -sx / l; nor[k * 3 + 1] = 1 / l; nor[k * 3 + 2] = -sz / l;
     };
@@ -421,23 +406,32 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
     group.add(node.mesh);
   }
 
-  const pixelTiles = new Map();
-  // Photograph colour (0..1 sRGB) at a point, when a detailed tile covers it.
-  function sampleColor(wx, wz) {
-    const [lon, lat] = toLonLat(wx, wz);
-    const fx = lon2x(lon, FOREST_Z), fy = lat2y(lat, FOREST_Z);
-    const node = pixelTiles.get(Math.floor(fx) + "," + Math.floor(fy));
-    if (!node) return null;
-    const { data, width, height } = node.pixels;
-    const px = Math.min(width - 1, Math.floor((fx - node.x) * width));
-    const py = Math.min(height - 1, Math.floor((1 - (fy - node.y)) * height)); // stored bottom-up
+  // One CPU-readable copy of the bundled survey supplies continuous vegetation cover,
+  // including while walking offline. Detailed aerial tiles stay entirely on the GPU.
+  let coverPixels;
+  function landColorReady() {
+    if (coverPixels) return true;
+    const image = baseTexture.image;
+    if (!image?.naturalWidth) return false;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = Math.round(canvas.width * image.naturalHeight / image.naturalWidth);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    coverPixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return true;
+  }
+  function landColor(x, z) {
+    const { width, height, data } = coverPixels;
+    const px = Math.max(0, Math.min(width - 1, Math.floor((x - bounds.x0) / (bounds.x1 - bounds.x0) * width)));
+    const py = Math.max(0, Math.min(height - 1, Math.floor((z - bounds.z0) / (bounds.z1 - bounds.z0) * height)));
     const i = (py * width + px) * 4;
     return [data[i] / 255, data[i + 1] / 255, data[i + 2] / 255];
   }
 
   // ----- loading -----
   const queue = new Set();
-  let loading = 0;
+  let loading = 0, networkErrors = 0, retryAfter = 0;
   function request(node) {
     if (node.state !== "none") return;
     node.state = "queued";
@@ -451,13 +445,6 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
       if (!res.ok) throw new Error(res.status);
       const bmp = await createImageBitmap(await res.blob(), { imageOrientation: "flipY" });
       if (node.state !== "loading") { bmp.close?.(); return; }
-      if (node.z === FOREST_Z && typeof OffscreenCanvas !== "undefined") {
-        const c = new OffscreenCanvas(bmp.width, bmp.height);
-        const cx = c.getContext("2d", { willReadFrequently: true });
-        cx.drawImage(bmp, 0, 0);
-        node.pixels = cx.getImageData(0, 0, bmp.width, bmp.height);
-        pixelTiles.set(node.x + "," + node.y, node);
-      }
       const tex = new Texture(bmp);
       tex.colorSpace = SRGBColorSpace;
       tex.anisotropy = anisotropy;
@@ -471,9 +458,13 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
         node.mesh.material.uniforms.map.value = tex;
         node.mesh.material.uniforms.useBase.value = 0;
       }
+      networkErrors = 0;
       stats.loaded++;
-    } catch {
-      if (node.state === "loading") node.state = "failed";
+    } catch (error) {
+      if (node.state === "loading") {
+        node.state = "failed";
+        if (error instanceof TypeError && ++networkErrors >= 4) retryAfter = performance.now() + 30000;
+      }
       stats.failed++;
     } finally {
       loading--;
@@ -481,7 +472,7 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
   }
   const camPos = new Vector3();
   function pump() {
-    if (!queue.size || loading >= MAX_LOADS) return;
+    if (!queue.size || loading >= MAX_LOADS || performance.now() < retryAfter) return;
     const list = [...queue].sort((a, b) => a.box.distanceToPoint(camPos) / a.size - b.box.distanceToPoint(camPos) / b.size);
     for (const node of list) {
       if (loading >= MAX_LOADS) break;
@@ -521,7 +512,7 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
         ];
       }
       for (const c of node.children) { c.used = frame; request(c); }
-      if (node.children.every(ready)) {
+      if (node.children.every(ready) || performance.now() < retryAfter || node.z < 14 || dist < node.size * 0.6) {
         // Build the children's meshes within this frame's budget; until all four exist,
         // the parent keeps standing in for them, so there is never a hole.
         for (const c of node.children) if (!c.mesh && performance.now() < budgetEnd) buildMesh(c);
@@ -538,8 +529,6 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
     if (node.mesh) { group.remove(node.mesh); node.mesh.geometry.dispose(); node.mesh.material.dispose(); node.mesh = null; }
     if (node.tex) { node.tex.image?.close?.(); node.tex.dispose(); node.tex = null; }
     node.state = "gone";
-    if (node.pixels) pixelTiles.delete(node.x + "," + node.y);
-    node.pixels = null;
     onDispose?.(node);
   }
   function prune(node) {
@@ -570,17 +559,5 @@ export function createTiles({ renderer, camera, baseTexture, lite, onDispose }) 
     if (frame % 60 === 0) roots.forEach(prune);
   }
 
-  // Ready tiles at the forest level near a point.
-  function forestTiles(p, radius) {
-    const out = [];
-    const walk = (n) => {
-      if (n.box.distanceToPoint(p) > radius) return;
-      if (n.z === FOREST_Z) { if (n.pixels) out.push(n); return; }
-      n.children?.forEach(walk);
-    };
-    roots.forEach(walk);
-    return out;
-  }
-
-  return { group, uniforms: shared, update, stats, forestTiles, sampleColor };
+  return { group, uniforms: shared, update, stats, landColorReady, landColor, stoneTexture };
 }

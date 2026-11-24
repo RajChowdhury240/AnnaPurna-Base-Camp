@@ -11,6 +11,7 @@ import { ground, sunlight } from "./terrain.js";
 const M = 0.001; // one metre in world units
 
 const pathFrag = /* glsl */ `
+uniform sampler2D stoneMap;
 varying vec3 vPath;   // x: metres along, y: metres across, z: 0 tread, 1 riser, 2 verge
 varying float vAlt;
 float ph(vec2 p) { p = fract(p * vec2(443.897, 441.423)); p += dot(p, p.yx + 19.19); return fract((p.x + p.y) * p.x); }
@@ -29,9 +30,10 @@ vec3 vor(vec2 p) {
 }
 `;
 
-function makeMaterial() {
+function makeMaterial(stoneTexture) {
   const m = new MeshLambertMaterial({ vertexColors: true });
   m.onBeforeCompile = (shader) => {
+    shader.uniforms.stoneMap = { value: stoneTexture };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute vec3 pathUV;\nvarying vec3 vPath;\nvarying float vAlt;\nvarying float vDistP;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvPath = pathUV;\nvAlt = position.y;")
@@ -44,40 +46,30 @@ function makeMaterial() {
       .replace("#include <color_fragment>", `#include <color_fragment>
 {
   float s = vPath.x, u = vPath.y, kind = vPath.z;
-  float far = smoothstep(25.0 * 0.001, 90.0 * 0.001, vDistP);
-  float high = smoothstep(3.25, 3.55, vAlt);  // gravel above the tree line
-  vec3 soil = vec3(0.36, 0.29, 0.21);
-  vec3 col;
-  if (kind > 1.5) {
-    // Verge: rubble and earth, a retaining edge of piled stone.
-    vec3 r = vor(vec2(s, u * 1.6) * 3.2);
-    float stone = smoothstep(0.06, 0.16, r.y - r.x) * step(0.35, r.z);
-    vec3 rc = mix(vec3(0.42, 0.40, 0.37), vec3(0.55, 0.52, 0.48), r.z);
-    col = mix(soil * (0.8 + r.z * 0.3), rc * (0.75 + 0.35 * (1.0 - r.x)), stone);
-  } else if (kind > 0.5) {
-    // Riser: stacked dry-stone face.
-    vec3 r = vor(vec2(s * 2.2, vAlt * 1000.0 * 5.5));
-    float joint = smoothstep(0.03, 0.1, r.y - r.x);
-    col = mix(vec3(0.12, 0.1, 0.08), mix(vec3(0.38, 0.36, 0.33), vec3(0.5, 0.47, 0.43), r.z) * (0.8 + 0.3 * (1.0 - r.x)), joint);
-  } else {
-    // Tread: irregular flagstones set in earth, worn smoother along the middle.
-    vec3 r = vor(vec2(s, u) * 2.3);
-    float joint = smoothstep(0.03, 0.11, r.y - r.x);
-    vec3 stone = mix(vec3(0.44, 0.42, 0.39), vec3(0.6, 0.56, 0.5), r.z);
-    stone = mix(stone, stone * vec3(1.05, 0.98, 0.9), ph(vec2(r.z, 3.0)));
-    float wear = 1.0 - smoothstep(0.2, 0.8, abs(u));
-    stone *= 0.82 + 0.28 * (1.0 - r.x) + wear * 0.06;
-    vec3 flag = mix(soil * 0.7, stone, joint);
-    // Gravel: packed grit with scattered pebbles.
-    vec3 g = vor(vec2(s, u) * 14.0);
-    vec3 grav = mix(vec3(0.46, 0.42, 0.37), vec3(0.58, 0.54, 0.48), g.z) * (0.85 + 0.2 * (1.0 - g.x));
-    grav = mix(grav * 0.75, grav, smoothstep(0.02, 0.08, g.y - g.x));
-    col = mix(flag, grav, high);
-    // The path's edge softens into the verge.
-    col = mix(col, soil, smoothstep(0.55, 1.0, abs(u) / 0.8) * 0.5);
+  bool wall = kind > 0.5 && kind < 1.5;
+  bool verge = kind > 1.5 && kind < 2.5;
+  vec2 face = wall ? vec2(u, vAlt * 1000.0) : vec2(s, u);
+  // The vertical face uses width and height, so the strata continue across the riser.
+  vec3 slab = vor(wall ? face * vec2(1.35, 3.4) :
+                  verge ? face * vec2(3.5, 5.4) : face * vec2(1.56, 1.15));
+  float lip = slab.y - slab.x;
+  float aa = min(0.16, fwidth(lip));
+  float joints = smoothstep(0.012, 0.075 + aa, lip);
+  vec2 grainUV = face * (wall ? vec2(0.87, 1.28) : vec2(0.81, 1.09));
+  vec3 grain = texture2D(stoneMap, grainUV + vec2(slab.z * 3.7, slab.z)).rgb;
+  vec3 stone = grain * mix(vec3(0.69, 0.79, 0.88), vec3(1.22, 1.10, 0.94), slab.z);
+  float wear = (1.0 - smoothstep(0.18, 0.79, abs(u))) * float(!wall && !verge);
+  stone = mix(stone, vec3(dot(stone, vec3(0.3,0.58,0.12))) * 1.16, wear * 0.28);
+  float moss = (1.0 - smoothstep(2.85, 3.65, vAlt)) * smoothstep(0.52, 0.96, abs(u));
+  vec3 earth = mix(vec3(0.073, 0.058, 0.041), vec3(0.059, 0.084, 0.040), moss);
+  stone *= mix(vec3(1.0), vec3(0.68, 0.83, 0.55), moss * (1.0 - smoothstep(0.03, 0.35, lip)));
+  vec3 surface = mix(earth, stone, joints);
+  if (verge) surface = mix(earth, surface, smoothstep(0.22, 0.57, slab.z));
+  if (kind < 0.5 && vAlt > 3.25) {
+    float grit = texture2D(stoneMap, face * 4.2).g;
+    surface = mix(surface, vec3(0.83, 0.74, 0.63) * (0.10 + grit * 0.65), smoothstep(3.25, 3.65, vAlt));
   }
-  col = mix(col, vec3(0.45, 0.41, 0.36), far * 0.7);
-  diffuseColor.rgb *= col * 2.2; // matte lighting in three.js divides by pi
+  diffuseColor.rgb *= mix(surface, vec3(0.195, 0.185, 0.16), smoothstep(0.04, 0.16, vDistP) * 0.55) * 1.72;
 }`);
   };
   return m;
@@ -102,15 +94,15 @@ function edgeRock() {
   return g;
 }
 
-export function createPathway({ scene, path, sun, lite }) {
+export function createPathway({ scene, path, sun, lite, stoneTexture }) {
   const { x: PX, z: PZ, d: PD, steps: PS, count } = path;
-  const CHUNK = 400; // samples per chunk (~200 m)
-  const material = makeMaterial();
+  const CHUNK = 96; // about 48 metres of trail per build
+  const material = makeMaterial(stoneTexture);
   const rockMat = new MeshLambertMaterial({ color: "#8e8a83" });
   const rockGeo = edgeRock();
   const chunks = new Map();
   const dummy = new Object3D();
-  const RISE = 0.17 * M, BUILD_R = lite ? 0.22 : 0.32, DROP_R = BUILD_R + 0.15;
+  const RISE = 0.17 * M, BUILD_R = lite ? 0.14 : 0.21, DROP_R = BUILD_R + 0.15;
 
   // Sun or shade on a 6 m grid.
   const shade = new Map();
@@ -123,95 +115,74 @@ export function createPathway({ scene, path, sun, lite }) {
   const hash = (n) => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
 
   function build(c) {
-    const i0 = Math.max(0, c * CHUNK - 1), i1 = Math.min(count - 1, (c + 1) * CHUNK);
-    const pos = [], uv = [], col = [];
-    const rocks = [];
-    let level = null;
-    let prev = null;
-    const section = (i, y, kind) => {
+    const i0 = c * CHUNK, i1 = Math.min(count - 1, (c + 1) * CHUNK);
+    const pos = [], uv = [], col = [], rocks = [];
+    function profile(i) {
       const x = PX[i], z = PZ[i];
-      const a = PX[Math.min(count - 1, i + 1)] - PX[Math.max(0, i - 1)];
-      const b = PZ[Math.min(count - 1, i + 1)] - PZ[Math.max(0, i - 1)];
-      const l = Math.hypot(a, b) || 1;
-      const nx = -b / l, nz = a / l; // across the path
-      const sM = (PD[i] / M) % 997; // metres along, wrapped to keep the pattern precise
-      const w = (1.35 + hash(Math.floor(sM / 7)) * 0.5) * M * (PS[i] ? 0.95 : 1);
-      const lit = shadeAt(x, y, z);
-      const k = 0.5 + 0.5 * lit;
-      // Five points across: verge, edge, centre, edge, verge.
-      const verge = 0.55 * M;
-      const pts = [
-        [-(w / 2 + verge), "v"], [-w / 2, "e"], [0, "c"], [w / 2, "e"], [w / 2 + verge, "v"],
-      ].map(([o, t]) => {
-        const px = x + nx * o, pz = z + nz * o;
-        const gy = ground(px, pz);
-        // A slight crown sheds water off the tread; the verge is tucked into the slope.
-        const py = t === "v" ? Math.min(y - 0.03 * M, gy - 0.03 * M) : y + (t === "c" ? 0.02 * M : 0);
-        return [px, py, pz, o / M, t === "v" ? 2 : kind];
-      });
-      return { pts, k, sM };
-    };
-    const quad = (A, B) => {
-      for (let j = 0; j < 4; j++) {
-        const a0 = A.pts[j], a1 = A.pts[j + 1], b0 = B.pts[j], b1 = B.pts[j + 1];
-        const tri = [[a0, A], [a1, A], [b0, B], [a1, A], [b1, B], [b0, B]]; // counter-clockwise from above
-        const kindQ = Math.max(a0[4], a1[4]) === 2 ? 2 : B.riser ? 1 : 0;
-        for (const [p, S] of tri) {
-          pos.push(p[0], p[1], p[2]);
-          uv.push(S.sM, p[3], kindQ);
-          col.push(S.k, S.k, S.k * 1.02);
-        }
-      }
-    };
-    for (let i = i0; i <= i1; i++) {
-      const x = PX[i], z = PZ[i];
-      // Highest ground under the path's width: the path is cut level across the slope,
-      // and its downhill side is held up by the verge.
-      const a = PX[Math.min(count - 1, i + 1)] - PX[Math.max(0, i - 1)];
-      const b = PZ[Math.min(count - 1, i + 1)] - PZ[Math.max(0, i - 1)];
-      const l = Math.hypot(a, b) || 1;
-      const nx = -b / l, nz = a / l;
-      // The ground is carved level along the line, so the path simply lies on its shelf.
-      const top = ground(x, z) + 0.05 * M;
-      // Grade over a few metres: staircases where mapped as steps or steeper than ~1 in 5.
+      const lo = Math.max(0, i - 1), hi = Math.min(count - 1, i + 1);
+      const dx = PX[hi] - PX[lo], dz = PZ[hi] - PZ[lo], len = Math.hypot(dx, dz) || 1;
       const ia = Math.max(0, i - 4), ib = Math.min(count - 1, i + 4);
       const grade = Math.abs(ground(PX[ib], PZ[ib]) - ground(PX[ia], PZ[ia])) / Math.max(1e-6, PD[ib] - PD[ia]);
-      const stair = PS[i] || grade > 0.2;
-      let y = top;
-      if (stair) {
-        if (level === null) {
-          level = Math.ceil(top / RISE) * RISE;
-          const S = section(i, level, 0);
-          if (prev) quad(prev, S);
-          prev = S;
-          continue;
+      const stair = Boolean(PS[i]) || grade > 0.2;
+      const top = ground(x, z) + 0.07 * M;
+      return { x, z, nx: -dz / len, nz: dx / len, s: PD[i] / M,
+        y: stair ? Math.ceil(top / RISE) * RISE : top, stair };
+    }
+    function section(a, b, t, y, chip = 0) {
+      const lerp = (v, w) => v + (w - v) * t;
+      const x = lerp(a.x, b.x), z = lerp(a.z, b.z), s = lerp(a.s, b.s);
+      const nx = lerp(a.nx, b.nx), nz = lerp(a.nz, b.nz);
+      const width = 0.81 + 0.095 * Math.sin(s * 0.43) + 0.055 * Math.sin(s * 1.63);
+      const k = 0.62 + 0.38 * shadeAt(x, y, z);
+      const pts = [-width - 0.43, -width, 0.035, width, width + 0.43].map((u, j) => {
+        const edge = j === 0 || j === 4;
+        const nick = chip * (hash(j + Math.round(chip * 7800)) - 0.5) * 0.065;
+        const px = x + (nx * u + nz * nick) * M, pz = z + (nz * u - nx * nick) * M;
+        const py = edge ? Math.min(y - 0.10 * M, ground(px, pz) - 0.015 * M) : y + (j === 2 ? 0.012 * M : 0);
+        return [px, py, pz, s + nick, u];
+      });
+      return { pts, k };
+    }
+    function quad(a, b, kind, low = 1, high = 1) {
+      for (let j = 0; j < 4; j++) {
+        const face = j === 0 || j === 3 ? 2 : kind;
+        for (const [row, index, tone] of [[a,j,low],[a,j+1,low],[b,j,high],[a,j+1,low],[b,j+1,high],[b,j,high]]) {
+          const [x, y, z, s, u] = row.pts[index];
+          pos.push(x, y, z); uv.push(s, u, face);
+          const shade = row.k * tone;
+          col.push(shade, shade, shade * 1.02);
         }
-        if (Math.abs(top - level) > RISE * 0.7) {
-          const next = level + Math.sign(top - level) * RISE;
-          const S = section(i, level, 0);
-          quad(prev, S);
-          // The riser: same place, new height.
-          const R = section(i, next, 0);
-          R.riser = true;
-          quad(S, R);
-          level = next;
-          prev = R;
-          continue;
-        }
-        y = level;
-      } else level = null;
-      const S = section(i, y, 0);
-      if (prev) quad(prev, S);
-      prev = S;
-      // Stones along the verges.
-      if (i % 3 === 0) {
-        const h = hash(i * 1.37);
-        if (h > 0.45) {
-          const side = h > 0.72 ? 1 : -1;
-          const off = (0.85 + hash(i * 2.1) * 0.5) * M * side;
-          const rx = x + nx * off, rz = z + nz * off;
-          rocks.push({ x: rx, y: Math.min(y, ground(rx, rz)), z: rz, s: (0.18 + hash(i * 3.3) * 0.32) * M, rot: h * 9, lit: shadeAt(rx, y, rz) });
-        }
+      }
+    }
+    let a = profile(i0), prev = section(a, a, 0, a.y);
+    for (let i = i0 + 1; i <= i1; i++) {
+      const b = profile(i), run = Math.max(0.001, b.s - a.s);
+      const steps = a.stair && b.stair ? Math.round(Math.abs(b.y - a.y) / RISE) : 0;
+      const treadKind = a.stair && b.stair ? 3 : 0;
+      // Multiple risers can fall within one survey sample on a steep flight.
+      for (let j = 0; j < steps; j++) {
+        const t = (j + 0.5) / steps, bevel = Math.min(0.026 / run, 0.16 / steps);
+        const dy = (b.y - a.y) / steps, bottom = a.y + j * dy, top = bottom + dy;
+        const chip = 0.4 + 0.6 * hash(i * 17 + j);
+        const lip = Math.sign(dy) * 0.022 * M;
+        const entry = section(a, b, t - bevel, bottom, chip);
+        const faceA = dy > 0 ? entry : section(a, b, t, bottom + lip, chip);
+        const faceB = section(a, b, t, dy > 0 ? top - lip : top, chip);
+        const exit = dy > 0 ? section(a, b, t + bevel, top, chip) : faceB;
+        quad(prev, entry, 3);
+        if (dy < 0) quad(entry, faceA, 1, 1.06, 1);
+        quad(faceA, faceB, 1, dy > 0 ? 0.62 : 1, dy > 0 ? 1 : 0.62);
+        if (dy > 0) quad(faceB, exit, 1, 1, 1.06);
+        prev = exit;
+      }
+      const end = section(b, b, 0, b.y);
+      quad(prev, end, treadKind);
+      prev = end;
+      a = b;
+      if (i % 3 === 0 && hash(i * 1.37) > 0.45) {
+        const off = (0.87 + hash(i * 2.1) * 0.43) * M * (hash(i) > 0.5 ? 1 : -1);
+        const x = b.x + b.nx * off, z = b.z + b.nz * off, y = ground(x, z);
+        rocks.push({ x, y, z, s: (0.18 + hash(i * 3.3) * 0.32) * M, rot: hash(i) * 9, lit: shadeAt(x, y, z) });
       }
     }
     const g = new BufferGeometry();
@@ -220,7 +191,7 @@ export function createPathway({ scene, path, sun, lite }) {
     g.setAttribute("color", new Float32BufferAttribute(col, 3));
     g.computeVertexNormals();
     const mesh = new Mesh(g, material);
-    mesh.frustumCulled = false;
+    g.computeBoundingSphere();
     mesh.renderOrder = 2;
     scene.add(mesh);
     let rockMesh = null;
@@ -235,12 +206,10 @@ export function createPathway({ scene, path, sun, lite }) {
         rockMesh.setMatrixAt(k, dummy.matrix);
         rockMesh.setColorAt(k, cc.setScalar(0.5 + 0.5 * r.lit));
       });
-      rockMesh.frustumCulled = false;
+      rockMesh.computeBoundingSphere();
       scene.add(rockMesh);
     }
-    // Centre of the chunk, for distance checks.
-    const mid = Math.floor((i0 + i1) / 2);
-    return { mesh, rockMesh, x: PX[mid], z: PZ[mid], span: (PD[i1] - PD[i0]) / 2 };
+    return { mesh, rockMesh };
   }
   function drop(c) {
     const ch = chunks.get(c);
@@ -249,13 +218,13 @@ export function createPathway({ scene, path, sun, lite }) {
     chunks.delete(c);
   }
 
-  const nChunks = Math.ceil(count / CHUNK);
+  const nChunks = Math.ceil((count - 1) / CHUNK);
   // Rough chunk centres for quick distance tests.
   const centres = [];
   for (let c = 0; c < nChunks; c++) {
     const i0 = c * CHUNK, i1 = Math.min(count - 1, (c + 1) * CHUNK);
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let i = i0; i <= i1; i += 20) { minX = Math.min(minX, PX[i]); maxX = Math.max(maxX, PX[i]); minZ = Math.min(minZ, PZ[i]); maxZ = Math.max(maxZ, PZ[i]); }
+    for (let i = i0; i <= i1; i++) { minX = Math.min(minX, PX[i]); maxX = Math.max(maxX, PX[i]); minZ = Math.min(minZ, PZ[i]); maxZ = Math.max(maxZ, PZ[i]); }
     centres.push({ minX, maxX, minZ, maxZ });
   }
   const distTo = (c, x, z) => {
@@ -275,7 +244,7 @@ export function createPathway({ scene, path, sun, lite }) {
       if (d < BUILD_R) want.push([d, c]);
     }
     want.sort((a, b) => a[0] - b[0]);
-    const end = performance.now() + 3;
+    const end = performance.now() + 1.5;
     for (const [, c] of want) {
       if (performance.now() > end) break;
       chunks.set(c, build(c));
@@ -285,6 +254,5 @@ export function createPathway({ scene, path, sun, lite }) {
     shade.clear();
     for (const c of [...chunks.keys()]) drop(c);
   }
-  // Height of the path surface under a point near the line (for the walker's feet).
   return { update, relight, get chunks() { return chunks.size; } };
 }

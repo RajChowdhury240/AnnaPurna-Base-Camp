@@ -7,40 +7,33 @@ import {
 } from "three";
 import { ground, sunlight } from "./terrain.js";
 
-function clumpGeometry() {
-  // Ten curved, tapered blades in a tuft; units are metres, 1 m tall.
-  const pos = [], nor = [], col = [];
-  const SEG = 3;
+function clumpGeometry(lite) {
+  const pos = [], nor = [], col = [], index = [];
   let seed = 7;
-  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let b = 0; b < 10; b++) {
-    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.45;
-    const bx = Math.cos(a) * d, bz = Math.sin(a) * d;
-    const yaw = r() * Math.PI * 2, bend = 0.15 + r() * 0.35, h = 0.55 + r() * 0.45, w = 0.022 + r() * 0.02;
-    const dx = Math.cos(yaw), dz = Math.sin(yaw);
-    const pts = [];
-    for (let i = 0; i <= SEG; i++) {
-      const t = i / SEG;
-      const off = bend * t * t;
-      const half = w * (1 - t * 0.92);
-      const cx = bx + dx * off, cz = bz + dz * off, cy = h * t;
-      pts.push([cx - dz * half, cy, cz + dx * half, cx + dz * half, cy, cz - dx * half, t]);
-    }
-    for (let i = 0; i < SEG; i++) {
-      const [ax, ay, az, bx2, by, bz2, ta] = pts[i];
-      const [cx, cy, cz, ex, ey, ez, tb] = pts[i + 1];
-      for (const [x, y, z, t] of [[ax, ay, az, ta], [bx2, by, bz2, ta], [cx, cy, cz, tb], [bx2, by, bz2, ta], [ex, ey, ez, tb], [cx, cy, cz, tb]]) {
-        pos.push(x, y, z);
-        nor.push(0, 1, 0);
-        const k = 0.55 + t * 0.6; // darker at the root, light at the tip
-        col.push(k, k, k);
-      }
-    }
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let blade = 0; blade < (lite ? 6 : 9); blade++) {
+    const yaw = blade * 2.39996 + random() * 0.5;
+    const dx = Math.cos(yaw), dz = Math.sin(yaw), radius = 0.05 + random() * 0.24;
+    const h = 0.38 + random() * 0.65, bend = 0.13 + random() * 0.56;
+    const width = 0.018 + random() * 0.031, straw = random() > 0.73;
+    const first = pos.length / 3;
+    const point = (t, side) => {
+      const across = side * width * (1 - t);
+      const along = radius + bend * t * t + (side === 0 ? width * 0.38 : 0);
+      pos.push(dx * along - dz * across, h * t * (1 - 0.28 * t), dz * along + dx * across);
+      nor.push(dx * 0.40 - dz * side * 0.42, 0.88, dz * 0.40 + dx * side * 0.42);
+      const shade = (0.31 + t * 0.78) * (side < 0 ? 0.81 : 1);
+      col.push(shade * (straw ? 1.55 : 0.85 + t * 0.25), shade * (straw ? 1.02 : 1.15), shade * (straw ? 0.68 : 0.75));
+    };
+    for (const t of [0, 0.52]) for (const side of [-1, 0, 1]) point(t, side);
+    point(1, 0);
+    for (const n of [0,3,1, 1,3,4, 1,4,2, 2,4,5, 3,6,4, 4,6,5]) index.push(first + n);
   }
   const g = new BufferGeometry();
   g.setAttribute("position", new Float32BufferAttribute(pos, 3));
   g.setAttribute("normal", new Float32BufferAttribute(nor, 3));
   g.setAttribute("color", new Float32BufferAttribute(col, 3));
+  g.setIndex(index);
   return g;
 }
 
@@ -72,8 +65,8 @@ function rockGeometry() {
 }
 
 export function createCover({ scene, tiles, trail, lite, sun }) {
-  const CH = 0.026; // chunk size, km
-  const GRASS_R = 0.045, ROCK_R = 0.06;
+  const CH = 0.014; // chunk size, km
+  const GRASS_R = lite ? 0.019 : 0.028, ROCK_R = lite ? 0.030 : 0.040;
   const GRASS_CELL = lite ? 0.001 : 0.00072;
   const ROCK_CELL = 0.0031;
   const time = { value: 0 };
@@ -94,6 +87,7 @@ if (dither > vFade) discard;`);
   const grassMat = new MeshLambertMaterial({ vertexColors: true, side: DoubleSide });
   grassMat.onBeforeCompile = (shader) => {
     fadeShader(GRASS_R)(shader);
+    shader.fragmentShader = shader.fragmentShader.replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\nnormal *= faceDirection;");
     shader.vertexShader = shader.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
 // Wind: the tip moves most, gusts roll across the slope.
 vec3 root = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -104,7 +98,7 @@ transformed.z += gust * k * 0.12;`);
   };
   const rockMat = new MeshLambertMaterial({ vertexColors: true });
   rockMat.onBeforeCompile = fadeShader(ROCK_R);
-  const grassGeo = clumpGeometry(), rockGeo = rockGeometry();
+  const grassGeo = clumpGeometry(lite), rockGeo = rockGeometry();
 
   // Trail points on a coarse integer grid, to keep the walked path bare.
   const cells = new Map();
@@ -145,30 +139,30 @@ transformed.z += gust * k * 0.12;`);
   function build(ci, cj) {
     const x0 = ci * CH, z0 = cj * CH;
     const g = [], r = [];
-    let missing = 0;
+    // Seed and moisture vary over several metres, producing tussocks and bare gaps.
+    const biome = (x, z) => 0.5 + 0.25 * Math.sin(x * 730 + z * 240) + 0.25 * Math.sin(z * 890 - x * 318);
     // Grass.
     const gn = Math.ceil(CH / GRASS_CELL);
     for (let a = 0; a < gn; a++)
       for (let b = 0; b < gn; b++) {
-        const i = Math.round(x0 / GRASS_CELL) + a, j = Math.round(z0 / GRASS_CELL) + b;
+        const i = Math.floor(x0 / GRASS_CELL) + a, j = Math.floor(z0 / GRASS_CELL) + b;
         const h1 = hash(i, j), h2 = hash(j, i + 7), h3 = hash(i + 13, j - 5);
-        const x = (i + h1) * GRASS_CELL, z = (j + h2) * GRASS_CELL;
-        const c = tiles.sampleColor(x, z);
-        if (!c) { missing++; continue; }
-        const [R, G, B] = c;
+        const x = x0 + (a + h1) / gn * CH, z = z0 + (b + h2) / gn * CH;
+        const [R, G, B] = tiles.landColor(x, z);
         const lum = 0.3 * R + 0.59 * G + 0.11 * B;
         const sat = Math.max(R, G, B) - Math.min(R, G, B);
         if (lum > 0.5 || sat < 0.035 || B > G * 1.08) continue; // snow, rock, water
-        if (h3 < 0.18) continue;
+        const patch = biome(x, z);
+        if (h3 < 0.13 + patch * 0.48) continue;
         const pd = pathDist(x, z);
         if (pd < 0.0019) continue;
         const y = ground(x, z);
         if (y > 4.3) continue;
-        const s = (0.00035 + h1 * 0.0005) * (pd < 0.0035 ? 0.55 : 1);
+        const s = (0.00025 + h1 * 0.00055 + patch * 0.00028) * (pd < 0.0035 ? 0.55 : 1);
         const dry = Math.min(1, Math.max(0, (y - 2.9) / 0.8));
-        let gr = Math.min(1, G * 1.55 + 0.05), rr = Math.min(1, R * 1.45 + 0.03);
-        const bb = Math.min(B * 1.05, gr * 0.72);
-        rr = rr + (gr * 0.95 - rr) * dry * 0.6;
+        const gr = Math.min(0.58, 0.21 + G * 0.57 + patch * 0.06);
+        const rr = gr * (0.78 + 0.32 * dry + h3 * 0.12);
+        const bb = gr * (0.40 + dry * 0.18);
         g.push({ x, y, z, s, rot: h2 * 6.283, sy: 0.8 + h3 * 0.6, c: [rr, gr, bb], lit: shadeAt(x, y, z) });
       }
     // Loose rock: scree and boulders where the ground is bare, and above the grass line.
@@ -177,10 +171,8 @@ transformed.z += gust * k * 0.12;`);
       for (let b = 0; b < rn; b++) {
         const i = Math.round(x0 / ROCK_CELL) + a, j = Math.round(z0 / ROCK_CELL) + b;
         const h1 = hash(i + 101, j), h2 = hash(j + 3, i + 211), h3 = hash(i - 77, j + 19);
-        const x = (i + h1) * ROCK_CELL, z = (j + h2) * ROCK_CELL;
-        const c = tiles.sampleColor(x, z);
-        if (!c) continue;
-        const [R, G, B] = c;
+        const x = x0 + (a + h1) / rn * CH, z = z0 + (b + h2) / rn * CH;
+        const [R, G, B] = tiles.landColor(x, z);
         const lum = 0.3 * R + 0.59 * G + 0.11 * B;
         const sat = Math.max(R, G, B) - Math.min(R, G, B);
         const y = ground(x, z);
@@ -207,11 +199,12 @@ transformed.z += gust * k * 0.12;`);
         col.setRGB(t.c[0], t.c[1], t.c[2], "srgb").multiplyScalar(0.45 + 0.55 * t.lit);
         m.setColorAt(k, col);
       });
-      m.frustumCulled = false;
+      m.computeBoundingSphere();
+      m.boundingSphere.radius += 0.0004;
       scene.add(m);
       return m;
     };
-    return { grass: make(g, grassGeo, grassMat), rock: make(r, rockGeo, rockMat), missing };
+    return { grass: make(g, grassGeo, grassMat), rock: make(r, rockGeo, rockMat) };
   }
   function drop(k) {
     const c = chunks.get(k);
@@ -219,21 +212,23 @@ transformed.z += gust * k * 0.12;`);
     chunks.delete(k);
   }
 
-  let lastCx = Infinity, lastCz = Infinity, retry = 0;
+
   function update(camera, dt, onFoot) {
     time.value += dt;
     if (!onFoot) { if (chunks.size) for (const k of [...chunks.keys()]) drop(k); return; }
+    if (!tiles.landColorReady()) return;
     const { x, z } = camera.position;
     const R = Math.max(GRASS_R, ROCK_R) + CH;
     const ci0 = Math.floor((x - R) / CH), ci1 = Math.floor((x + R) / CH);
     const cj0 = Math.floor((z - R) / CH), cj1 = Math.floor((z + R) / CH);
     // Drop chunks that fell behind.
-    for (const [k, c] of chunks) if (Math.hypot(c.cx - x, c.cz - z) > R + CH * 1.5) drop(k);
+    for (const [k, c] of chunks) {
+      const d = Math.hypot(c.cx - x, c.cz - z);
+      if (d > R + CH) { drop(k); continue; }
+      if (c.grass) c.grass.visible = d < GRASS_R + CH * 0.72;
+      if (c.rock) c.rock.visible = d < ROCK_R + CH * 0.72;
+    }
     // Fill the nearest missing chunks first, within about 3 ms.
-    const moved = Math.hypot(x - lastCx, z - lastCz) > CH * 0.25;
-    if (!moved && ++retry < 20) {
-      // Still re-check chunks whose photographs had not arrived yet.
-    } else { retry = 0; lastCx = x; lastCz = z; }
     const todo = [];
     for (let i = ci0; i <= ci1; i++)
       for (let j = cj0; j <= cj1; j++) {
@@ -241,15 +236,14 @@ transformed.z += gust * k * 0.12;`);
         const d = Math.hypot(cx - x, cz - z);
         if (d > R) continue;
         const k = key(i, j);
-        const c = chunks.get(k);
-        if (c && !(c.missing > 20 && retry === 0)) continue;
+        if (chunks.has(k)) continue;
         todo.push({ i, j, d, k });
       }
     todo.sort((a, b) => a.d - b.d);
-    const end = performance.now() + 2.5;
+    const end = performance.now() + 1.5;
     for (const t of todo) {
       if (performance.now() > end) break;
-      if (chunks.has(t.k)) drop(t.k);
+
       const c = build(t.i, t.j);
       c.cx = (t.i + 0.5) * CH; c.cz = (t.j + 0.5) * CH;
       chunks.set(t.k, c);

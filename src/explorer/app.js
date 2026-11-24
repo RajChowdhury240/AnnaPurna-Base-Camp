@@ -42,12 +42,12 @@ const total = trail.at(-1).d;
 // The ground ribbon uses the same smooth 2 m line as the stone path, so it stays
 // centred on the paving around switchbacks; the aerial overlay keeps the light line.
 world.setTrail(trail, densePath(0.002));
-const forest = createForest({ scene: world.scene, tiles: world.tiles, trail: densePath(0.004), lite, sun: world.sunDir });
+const forest = createForest({ scene: world.scene, tiles: world.tiles, lite, sun: world.sunDir });
 // The path as built stone, and a 2 m copy of the line to keep grass and trees off it.
 const path = densePath();
 const fine = [];
 for (let i = 0; i < path.count; i += 4) fine.push({ x: path.x[i], z: path.z[i] });
-const pathway = createPathway({ scene: world.scene, path, sun: world.sunDir, lite });
+const pathway = createPathway({ scene: world.scene, path, sun: world.sunDir, stoneTexture: world.tiles.stoneTexture, lite });
 const grass = createCover({ scene: world.scene, tiles: world.tiles, trail: fine, lite, sun: world.sunDir });
 const stopPos = stopXZ().map(([x, z]) => new Vector3(x, ground(x, z), z));
 const stopD = stopPos.map((p) => nearestOnTrail(p.x, p.z).d);
@@ -211,18 +211,18 @@ function flyAerialTo(target, dist = 6) {
   });
 }
 
-function placeWalker(x, z, yaw, eye = 0.003) {
-  Object.assign(state.walker, { x, z, yaw, pitch: 0.04, eye });
+function placeWalker(x, z, yaw, eye = 0.0021, pitch = 0.04) {
+  Object.assign(state.walker, { x, z, yaw, pitch, eye });
   if (state.mode !== "walk") setMode("walk", { keepWalker: true });
   else tweenTo(walkerCamPos(), walkerQuat(), 1.1);
 }
 function walkFromStop(i) {
   // Stand on the walked line itself, at the point closest to the stop.
-  const p = atDistance(stopD[i]);
-  const a = atDistance(stopD[i] + 0.25);
+  const p = glideAt(stopD[i]);
+  const heading = trailHeading(stopD[i], p);
   stopAuto();
   state.auto.d = stopD[i];
-  placeWalker(p.x, p.z, yawToward(a.x - p.x, a.z - p.z));
+  placeWalker(p.x, p.z, heading.yaw, 0.0021, heading.pitch);
 }
 
 // ---------- auto walk along the trail ----------
@@ -230,8 +230,8 @@ function startAuto() {
   if (state.mode !== "walk") {
     const near = nearestOnTrail(state.walker.x, state.walker.z);
     state.auto.d = near.off < 0.4 ? near.d : 0;
-    const p = glideAt(state.auto.d), a = glideAt(state.auto.d + 0.25);
-    Object.assign(state.walker, { x: p.x, z: p.z, yaw: yawToward(a.x - p.x, a.z - p.z), eye: 0.003 });
+    const p = glideAt(state.auto.d), heading = trailHeading(state.auto.d, p);
+    Object.assign(state.walker, { x: p.x, z: p.z, ...heading, eye: 0.0021 });
     setMode("walk", { keepWalker: true });
   } else {
     const near = nearestOnTrail(state.walker.x, state.walker.z);
@@ -696,6 +696,12 @@ function glideAt(d) {
   const t = path.d[hi] === path.d[lo] ? 0 : (d - path.d[lo]) / (path.d[hi] - path.d[lo]);
   return { x: path.x[lo] + (path.x[hi] - path.x[lo]) * t, z: path.z[lo] + (path.z[hi] - path.z[lo]) * t };
 }
+function trailHeading(d, p) {
+  const ahead = d < total - 0.001, sample = glideAt(d + (ahead ? 0.012 : -0.012));
+  const dx = (sample.x - p.x) * (ahead ? 1 : -1), dz = (sample.z - p.z) * (ahead ? 1 : -1);
+  const rise = (ground(sample.x, sample.z) - ground(p.x, p.z)) * (ahead ? 1 : -1);
+  return { yaw: yawToward(dx, dz), pitch: MathUtils.clamp(Math.atan2(rise, Math.hypot(dx, dz)) * 0.62 - 0.10, -0.38, 0.19) };
+}
 const angle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 // What the camera shows trails the controls slightly: drag and turns ease in and out.
 const view = { yaw: 0, pitch: 0, snap: true };
@@ -717,13 +723,13 @@ function walkStep(dt) {
       stopAuto();
       arriveAtBaseCamp();
     }
-    const p = glideAt(state.auto.d), a = glideAt(state.auto.d + 0.16);
+    const p = glideAt(state.auto.d);
     w.x = p.x; w.z = p.z;
     w.vx = w.vz = 0;
     if (performance.now() - state.auto.lastLook > 2600) {
-      const want = yawToward(a.x - p.x, a.z - p.z);
-      w.yaw += angle(want - w.yaw) * Math.min(1, dt * 0.9);
-      w.pitch += (0.03 - w.pitch) * Math.min(1, dt * 0.6);
+      const heading = trailHeading(state.auto.d, p);
+      w.yaw += angle(heading.yaw - w.yaw) * Math.min(1, dt * 2.8);
+      w.pitch += (heading.pitch - w.pitch) * Math.min(1, dt * 1.8);
     }
   } else {
     state.auto.v = 0;
@@ -847,7 +853,7 @@ function updateHud() {
   if (++miniTick % 2 === 0) miniDraw(here.x, here.z, bearing);
 }
 
-let hudTick = 0;
+let nextHud = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -888,7 +894,7 @@ function frame(now) {
   pathway.update(camera, state.mode === "walk" && above < 0.06);
   world.render(dt * 1000);
   updateLabels();
-  if ((hudTick++ & 1) === 0) updateHud();
+  if (now >= nextHud) { updateHud(); nextHud = now + 100; }
   requestAnimationFrame(frame);
 }
 

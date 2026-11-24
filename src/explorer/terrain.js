@@ -264,7 +264,7 @@ export function sunlight(x, y, z, L, steps = 26) {
   for (let i = 0; i < steps; i++) {
     const qx = x + L.x * t, qy = y + L.y * t, qz = z + L.z * t;
     if (qy > 8.3) break;
-    const d = qy - ground(qx, qz);
+    const d = qy - rawGround(qx, qz);
     if (d < 0) return 0;
     res = Math.min(res, (10 * d) / t);
     t = t * 1.24 + 0.015;
