@@ -1,0 +1,50 @@
+const paths = {
+  walk: '<circle cx="13" cy="4" r="2"/><path d="m9 21 3-7 3 3v4m-5-11 3-2 3 4 3 1M10 10l-2 4"/>',
+  aerial: '<path d="M3 12c3-5 15-5 18 0-3 5-15 5-18 0Z"/><circle cx="12" cy="12" r="3"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  sunset: '<path d="M17 18a5 5 0 0 0-10 0M12 3v6m-7.8 1.2 1.4 1.4M2 18h2m16 0h2m-3.6-6.4 1.4-1.4M22 22H2M8 6l4 3 4-3"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17v.4"/>',
+  locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>',
+  up: '<path d="m6 15 6-6 6 6"/>',
+  mountain:
+    '<path d="m2 19 7-12 4 6 3-5 6 11Z"/><path d="m6.6 11.2 2.4 2 2.2-2.2"/>',
+  pin: '<path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.3"/>',
+  compass:
+    '<circle cx="12" cy="12" r="9"/><path d="m16 8-2.6 5.4L8 16l2.6-5.4Z"/>',
+  route:
+    '<circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="6" r="2.5"/><path d="M7.5 18H16a3 3 0 0 0 0-6H8a3 3 0 0 1 0-6h8.5"/>',
+  steps: '<path d="M2 19h6v-5h5V9h5V4h4"/><path d="M4 22h18"/>',
+  layers: '<path d="m2 8 10-5 10 5-10 5zM3 12l9 4.5 9-4.5M3 16l9 4.5 9-4.5"/>',
+  cube: '<path d="m3 7 9-5 9 5v10l-9 5-9-5Z"/><path d="m3 7 9 5 9-5m-9 5v10"/>',
+  bookmark: '<path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16l-6-4z"/>',
+  arrow: '<path d="M4 12h15m-6-6 6 6-6 6"/>',
+  left: '<path d="m14.5 5-7 7 7 7"/>',
+  right: '<path d="m9.5 5 7 7-7 7"/>',
+  next: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+  prev: '<path d="M19 12H5m6-6-6 6 6 6"/>',
+  down: '<path d="M12 4v15m-6-6 6 6 6-6"/>',
+  bed: '<path d="M3 5v15m18-2H3m18 2V9H7v6h14M4 10h3"/><path d="M3 15h18"/>',
+  home: '<path d="m2 11 10-8 10 8M5 10v11h14V10m-10 11v-7h6v7"/>',
+  gain: '<path d="m3 17 7-7 4 4 7-9m-6 0h6v6"/>',
+  flag: '<path d="M5 21V3c5-3 8 3 14 0v10c-6 3-9-3-14 0"/>',
+  check: '<path d="m4 12 5 5L20 6"/>',
+  close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  play: '<path d="m8 5 11 7-11 7z"/>',
+  pause: '<path d="M8 5v14m8-14v14"/>',
+  expand: '<path d="M9 3H3v6m12-6h6v6M3 15v6h6m6 0h6v-6"/>',
+  plus: '<path d="M5 12h14m-7-7v14"/>',
+  minus: '<path d="M5 12h14"/>',
+  external: '<path d="M7 17 18 6M8 6h10v10"/>',
+  book: '<path d="M12 6C9 4 5 4 2 5v14c4-1 7-1 10 1 3-2 7-2 10-1V5c-4-1-7-1-10 1Zm0 0v14"/>',
+  bars: '<path d="M4 20v-5m5 5v-9m5 9V7m5 13V3"/>',
+  sign: '<path d="M12 2v20M4 4h13l4 3-4 3H4zM20 12H7l-4 3 4 3h13z"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.4"/>',
+  reset: '<path d="M4 10a8 8 0 1 1 1 7M4 4v6h6"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+  tent: '<path d="m2 21 10-16 10 16zm7 0 3-6 3 6M9 2l5 8m1-8-5 8"/>',
+};
+export const icon = (name, size = 20) =>
+  `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ""}</svg>`;
+export const logo =
+  '<svg aria-hidden="true" viewBox="0 0 44 36" width="42" height="35" fill="none"><path d="m2 29 13-23 6 10 4-8 17 21H2Z" fill="currentColor"/><path d="m8 25 8-13 5 7-4-2-2 2-1-2-6 8Zm13-4 4-8 10 12-8-6-2 1-1-3-3 4Z" fill="#f7faf9"/></svg>';

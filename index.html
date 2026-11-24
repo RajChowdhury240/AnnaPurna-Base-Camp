@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Annapurna Base Camp in 3D</title>
+    <meta
+      name="description"
+      content="Walk the Annapurna Base Camp trek in 3D: real elevation and satellite imagery of the Modi Khola valley, from Ghandruk at 1,940 m to the base camp at 4,130 m."
+    />
+    <meta property="og:title" content="Annapurna Base Camp in 3D" />
+    <meta
+      property="og:description"
+      content="Free-roam the Annapurna Sanctuary on real terrain and follow the trail stop by stop."
+    />
+    <meta name="theme-color" content="#0d1a20" />
+    <link rel="icon" href="./mountain.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <a class="skip" href="#mode-walk">Skip to the explorer controls</a>
+    <main class="explorer" id="explorer">
+      <canvas id="scene" tabindex="0" aria-label="3D terrain of the Annapurna Base Camp trek. Drag to look around, W A S D or the arrow keys to move."></canvas>
+      <div id="labels" class="labels" aria-hidden="false"></div>
+
+      <header class="top">
+        <a class="brand" href="./" aria-label="Annapurna Base Camp, reload the explorer">
+          <span class="brand-mark" data-logo></span>
+          <span class="brand-text"><strong>Annapurna Base Camp</strong><span>Modi Khola valley, Nepal</span></span>
+        </a>
+
+        <div class="compass" id="compass" aria-hidden="true">
+          <div class="compass-tape" id="compass-tape"></div>
+          <span class="compass-goal" id="compass-goal" title="Direction to Annapurna Base Camp"></span>
+          <span class="compass-needle"></span>
+        </div>
+
+        <div class="top-tools">
+          <div class="segmented" role="group" aria-label="View mode">
+            <button id="mode-aerial" aria-pressed="true"><span data-icon="aerial"></span><span class="lbl">Aerial</span></button>
+            <button id="mode-walk" aria-pressed="false"><span data-icon="walk"></span><span class="lbl">Walk</span></button>
+          </div>
+          <button class="tool" id="trail-btn" aria-pressed="true" aria-label="Hide the trail line" title="Trail line"><span data-icon="route"></span></button>
+          <label class="sun-time" title="Time of day">
+            <span data-icon="sun"></span>
+            <input type="range" id="sun" min="6.6" max="17.4" step="0.05" value="10.5" aria-label="Time of day" />
+            <output id="sun-out" for="sun">10:30</output>
+          </label>
+          <button class="tool" id="help-btn" aria-label="Controls and sources" title="Controls and sources" aria-expanded="false" aria-controls="help"><span data-icon="help"></span></button>
+        </div>
+      </header>
+
+      <section class="hint" id="hint" hidden aria-label="Walking controls">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span>
+        <span><kbd>Drag</kbd> look 360°</span>
+        <span><kbd>Shift</kbd> run</span>
+        <span><kbd>Q</kbd><kbd>E</kbd> lower / rise</span>
+      </section>
+
+      <div class="touch-pad" id="touch-pad" hidden>
+        <div class="stick" id="stick" aria-label="Move" role="application"><i id="stick-knob"></i></div>
+        <div class="lift">
+          <button id="rise" aria-label="Rise above the ground"><span data-icon="up"></span></button>
+          <button id="lower" aria-label="Lower toward the ground"><span data-icon="chevron"></span></button>
+        </div>
+      </div>
+
+      <aside class="panel" id="panel" aria-labelledby="panel-title" hidden>
+        <div id="panel-body"></div>
+      </aside>
+
+      <canvas class="minimap" id="minimap" width="200" height="200" aria-label="Map of your position. Select a point to go there." role="img"></canvas>
+
+      <footer class="dock">
+        <div class="readouts">
+          <div><span>Elevation</span><strong id="r-elev">–</strong></div>
+          <div><span>Heading</span><strong id="r-head">–</strong></div>
+          <div class="r-next"><span id="r-next-label">Nearest stop</span><strong id="r-next">–</strong></div>
+        </div>
+        <div class="profile" id="profile">
+          <div class="profile-head">
+            <button class="play" id="play" aria-pressed="false"><span data-icon="play"></span><span id="play-label">Walk the trail</span></button>
+            <div class="speed" role="group" aria-label="Walking speed" id="speed">
+              <button aria-pressed="true" data-speed="1">1×</button><button aria-pressed="false" data-speed="3">3×</button><button aria-pressed="false" data-speed="8">8×</button>
+            </div>
+            <span class="profile-dist" id="profile-dist"></span>
+          </div>
+          <div class="profile-chart" id="profile-chart" role="slider" tabindex="0" aria-label="Position along the trail" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <svg id="profile-svg" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div id="profile-stops"></div>
+            <span class="profile-you" id="profile-you"></span>
+            <span class="profile-tip" id="profile-tip" hidden></span>
+          </div>
+        </div>
+      </footer>
+
+      <div class="loader" id="loader" role="status">
+        <div class="loader-inner">
+          <span class="brand-mark" data-logo></span>
+          <p>Loading the terrain of the Annapurna Sanctuary</p>
+          <div class="loader-bar"><i id="loader-bar"></i></div>
+        </div>
+      </div>
+
+      <section class="intro" id="intro" hidden aria-labelledby="intro-title">
+        <h1 id="intro-title">Annapurna <em>Base Camp</em></h1>
+        <p>Real elevation and satellite imagery of the Modi Khola valley. Walk anywhere in it, or follow the trail from Ghandruk at 1,940 m to the foot of Annapurna I at 4,130 m.</p>
+        <div class="intro-actions">
+          <button class="btn primary" id="start-walk"><span data-icon="walk"></span>Start walking</button>
+          <button class="btn ghost" id="start-look">Look around from above</button>
+        </div>
+      </section>
+
+      <div class="help" id="help" hidden role="dialog" aria-labelledby="help-title">
+        <div class="help-head"><h2 id="help-title">Controls</h2><button class="tool" id="help-close" aria-label="Close controls"><span data-icon="close"></span></button></div>
+        <dl class="keys">
+          <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows</dt><dd>Walk</dd>
+          <dt><kbd>Shift</kbd></dt><dd>Run</dd>
+          <dt>Drag</dt><dd>Look around, 360°</dd>
+          <dt><kbd>Q</kbd> <kbd>E</kbd></dt><dd>Lower to the ground or rise for a drone view</dd>
+          <dt><kbd>Space</kbd></dt><dd>Walk the trail automatically</dd>
+          <dt><kbd>V</kbd></dt><dd>Switch between aerial and walking</dd>
+          <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next trail stop</dd>
+        </dl>
+        <h2>Sources</h2>
+        <ul class="sources" id="sources"></ul>
+      </div>
+
+      <section class="milestone" id="milestone" hidden aria-labelledby="ms-title" role="dialog">
+        <p class="ms-kicker">You made it</p>
+        <h2 id="ms-title">Annapurna Base Camp</h2>
+        <p class="ms-height">4,130 m</p>
+        <p class="ms-line">The amphitheatre of the Sanctuary: Annapurna I's south face to the north, Machhapuchhre behind you.</p>
+        <dl class="ms-stats">
+          <div><dt>Walked</dt><dd id="ms-walked">–</dd></div>
+          <div><dt>Climb from Ghandruk</dt><dd>+2,190 m</dd></div>
+          <div><dt>Stops passed</dt><dd id="ms-stops">–</dd></div>
+          <div><dt>Time on the trail</dt><dd id="ms-time">–</dd></div>
+        </dl>
+        <div class="ms-actions">
+          <button class="btn primary" id="ms-face">Face Annapurna I</button>
+          <button class="btn ghost" id="ms-close">Keep exploring</button>
+        </div>
+      </section>
+      <p class="credit" id="credit"></p>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      <p class="fallback" id="fallback" hidden>This browser could not start 3D graphics. Try a recent Chrome, Edge, Safari or Firefox with hardware acceleration turned on.</p>
+    </main>
+    <script type="module" src="/src/explorer/app.js"></script>
+  </body>
+</html>
